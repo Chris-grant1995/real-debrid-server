@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    container_name: real-debrid-server-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    networks:
+      - real-debrid-network
+    env_file:
+      - .env
+
+  frontend:
+    build: ./frontend
+    container_name: real-debrid-server-frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - real-debrid-network
+    env_file:
+      - ./.env # Read from root .env file
+    environment:
+      - VITE_RCLONE_MOUNT_URL=http://localhost:8080/torrents
+      - VITE_BACKEND_API_URL=/api # Frontend will now hit its own server at /api
+      - VITE_BACKEND_PROXY_TARGET=http://backend:8000 # Vite dev server inside container proxies to this
+    depends_on:
+      - backend
+
+  rclone:
+    image: rclone/rclone
+    container_name: real-debrid-server-rclone
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./rclone/config:/config/rclone
+    command: 'serve http realdebrid: --addr :8080 --allow-origin "*"'
+    networks:
+      - real-debrid-network
+
+networks:
+  real-debrid-network:
+    driver: bridge
