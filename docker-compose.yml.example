@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  backend:
+    image: ghcr.io/chris-grant1995/real-debrid-server/backend:latest
+    # container_name: real-debrid-server-backend # Optional: only if you want a fixed name
+    ports:
+      - "8000:8000"
+    # volumes: # Development volumes are usually not needed in production image deployments
+    #   - ./backend:/app 
+    networks:
+      - real-debrid-network
+    env_file:
+      - .env
+
+  frontend:
+    image: ghcr.io/chris-grant1995/real-debrid-server/frontend:latest
+    # container_name: real-debrid-server-frontend # Optional: only if you want a fixed name
+    ports:
+      - "5173:5173"
+    # volumes: # Development volumes are usually not needed in production image deployments
+    #   - ./frontend:/app
+    #   - /app/node_modules 
+    networks:
+      - real-debrid-network
+    env_file:
+      - ./.env # Read from root .env file
+    environment:
+      # VITE_RCLONE_MOUNT_URL might be http://YOUR_SERVER_IP:8080/torrents or similar
+      # if you're not proxying it through the frontend
+      - VITE_RCLONE_MOUNT_URL=http://localhost:8080/torrents 
+      - VITE_BACKEND_API_URL=/api # When proxying through a frontend server (e.g., Nginx)
+      # VITE_BACKEND_PROXY_TARGET is only for Vite dev server, not needed for production images
+      # - VITE_BACKEND_PROXY_TARGET=http://backend:8000 
+    depends_on:
+      - backend
+
+  rclone:
+    image: rclone/rclone
+    # container_name: real-debrid-server-rclone # Optional: only if you want a fixed name
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./rclone/config:/config/rclone
+    command: 'serve http realdebrid: --addr :8080 --allow-origin "*"'
+    networks:
+      - real-debrid-network
+
+networks:
+  real-debrid-network:
+    driver: bridge

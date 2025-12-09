@@ -2,7 +2,11 @@ version: '3.8'
 
 services:
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      platforms:
+        - linux/amd64
+        - linux/arm64
     container_name: real-debrid-server-backend
     ports:
       - "8000:8000"
@@ -14,7 +18,11 @@ services:
       - .env
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      platforms:
+        - linux/amd64
+        - linux/arm64
     container_name: real-debrid-server-frontend
     ports:
       - "5173:5173"
