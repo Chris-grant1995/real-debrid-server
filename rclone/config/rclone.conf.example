@@ -1,0 +1,6 @@
+[realdebrid]
+type = webdav
+url = https://dav.real-debrid.com/
+vendor = other
+user = YOUR_USERNAME
+pass = YOUR_PASSWORD # WARNING: Storing passwords in plain text is not secure. Use rclone config --config rclone/config/rclone.conf create realdebrid webdav to create it securely.
