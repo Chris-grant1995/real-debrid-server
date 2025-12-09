@@ -27,3 +27,4 @@ docker-compose.override.yml
 # Other
 *.log
 .DS_Store
+backend/torrents.db
