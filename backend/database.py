@@ -17,7 +17,7 @@ class Torrent(Base):
 
     id = Column(String, primary_key=True, index=True)
     filename = Column(String, index=True)
-    hash = Column(String, unique=True)
+    hash = Column(String)
     bytes = Column(Integer)
     host = Column(String)
     split = Column(Integer)

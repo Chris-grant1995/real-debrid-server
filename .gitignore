@@ -28,3 +28,4 @@ docker-compose.override.yml
 *.log
 .DS_Store
 backend/torrents.db
+rclone/config/rclone.conf

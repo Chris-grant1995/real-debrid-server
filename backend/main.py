@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 import requests
 import urllib.parse
+import logging
 from dotenv import load_dotenv
 from pydantic import BaseModel
 import asyncio
@@ -14,6 +15,13 @@ import database
 from database import SessionLocal, engine, Torrent, create_db_and_tables
 
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -50,8 +58,10 @@ def _get_rclone_listing(rclone_base_path: str):
     rclone_base_path should be like 'torrents/Some.Movie.1080p/'
     """
     full_url = f"http://rclone:8080/{rclone_base_path}"
+    logger.info(f"Fetching rclone listing from: {full_url}")
     try:
         response = requests.get(full_url, timeout=10)
+        logger.info(f"Rclone response status: {response.status_code}, content length: {len(response.text)}")
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         
@@ -177,14 +187,20 @@ async def update_torrents_status():
                 # --- Step 3: Check rclone availability (only for downloaded torrents not yet available) ---
                 if torrent.status == "downloaded" and not torrent.rclone_available:
                     try:
-                        encoded_filename = urllib.parse.quote(torrent.filename)
+                        filename_without_ext = os.path.splitext(torrent.filename)[0]
+                        encoded_filename = urllib.parse.quote(filename_without_ext)
                         rclone_url = f"http://rclone:8080/torrents/{encoded_filename}/"
+                        logger.info(f"Checking rclone availability for {torrent.id} at {rclone_url}")
                         resp = requests.head(rclone_url, timeout=5)
                         if resp.status_code == 200:
+                            logger.info(f"Rclone available for {torrent.id}")
                             torrent.rclone_available = True
                             torrent.rclone_available_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
                             updated = True
-                    except Exception:
+                        else:
+                             logger.info(f"Rclone NOT available for {torrent.id}. Status: {resp.status_code}")
+                    except Exception as e:
+                        logger.error(f"Error checking rclone availability for {torrent.id}: {e}")
                         pass # Ignore connection errors or timeouts, will retry next loop
                 
                 if updated:
@@ -194,6 +210,7 @@ async def update_torrents_status():
 
 @app.on_event("startup")
 async def startup_event():
+    logger.info("Backend server starting up...")
     create_db_and_tables()
     asyncio.create_task(update_torrents_status())
 
@@ -216,7 +233,7 @@ def add_magnet_link(magnet_link: MagnetLink, db: Session = Depends(get_db)):
         new_torrent = Torrent(
             id=torrent_id,
             filename="Fetching info...", # Placeholder
-            hash=add_magnet_response.get("hash", "N/A"), # Real-Debrid sometimes returns hash here
+            hash=add_magnet_response.get("hash"), # Default to None if not present
             bytes=0, # Placeholder
             host="real-debrid.com",
             split=0, # Placeholder
@@ -238,14 +255,14 @@ async def add_torrent_file(file: UploadFile = File(...), db: Session = Depends(g
         raise HTTPException(status_code=400, detail="Real-Debrid API key not set.")
     try:
         file_content = await file.read()
-        add_torrent_response = _make_rd_request("PUT", "/torrents/addTorrent", files={"file": (file.filename, file_content, file.content_type)})
+        add_torrent_response = _make_rd_request("PUT", "/torrents/addTorrent", data=file_content, headers={"Content-Type": "application/x-torrent"})
         torrent_id = add_torrent_response["id"]
 
         # Create a minimal torrent entry. The background task will update full info.
         new_torrent = Torrent(
             id=torrent_id,
             filename=file.filename, # Use original file name as placeholder
-            hash=add_torrent_response.get("hash", "N/A"),
+            hash=add_torrent_response.get("hash"),
             bytes=0, # Placeholder
             host="real-debrid.com",
             split=0, # Placeholder
@@ -263,16 +280,21 @@ async def add_torrent_file(file: UploadFile = File(...), db: Session = Depends(g
 
 @app.get("/api/torrents/{torrent_id}/files")
 def get_torrent_files(torrent_id: str, db: Session = Depends(get_db)):
+    logger.info(f"Request for files of torrent {torrent_id}")
     torrent = db.query(Torrent).filter(Torrent.id == torrent_id).first()
     if not torrent:
+        logger.warning(f"Torrent {torrent_id} not found")
         raise HTTPException(status_code=404, detail="Torrent not found.")
     
     if not torrent.rclone_available:
+        logger.warning(f"Torrent {torrent_id} rclone not available yet. Status: {torrent.status}")
         raise HTTPException(status_code=400, detail="Rclone link not available for this torrent.")
 
     # Construct the rclone path based on the torrent's filename
-    encoded_filename = urllib.parse.quote(torrent.filename)
+    filename_without_ext = os.path.splitext(torrent.filename)[0]
+    encoded_filename = urllib.parse.quote(filename_without_ext)
     rclone_base_path = f"torrents/{encoded_filename}/" # Assuming structure is /torrents/filename/
+    logger.info(f"DEBUG: get_torrent_files - rclone_base_path: {rclone_base_path}")
 
     files = _get_rclone_listing(rclone_base_path)
     if not files and torrent.status == "downloaded" and torrent.rclone_available:
@@ -293,10 +315,12 @@ async def stream_torrent_file(torrent_id: str, file_path: str, db: Session = Dep
 
     # Construct the full URL to the file on the rclone WebDAV server
     # file_path comes unquoted, but we need to ensure the base path is encoded correctly.
-    encoded_filename = urllib.parse.quote(torrent.filename)
+    filename_without_ext = os.path.splitext(torrent.filename)[0]
+    encoded_filename = urllib.parse.quote(filename_without_ext)
     # The file_path itself might contain slashes which are part of the path, not URL delimiters
     # urllib.parse.quote(file_path, safe='') encodes everything, which is what we want for path segments
     full_rclone_file_url = f"http://rclone:8080/torrents/{encoded_filename}/{file_path}"
+    logger.info(f"DEBUG: stream_torrent_file - full_rclone_file_url: {full_rclone_file_url}")
 
     try:
         # Use stream=True to avoid loading the whole file into memory
